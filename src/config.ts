@@ -45,6 +45,7 @@ export interface Config {
   firewall: boolean
   gsltToken: string
   dbPath: string
+  logDir: string
 }
 
 export const config: Config = {
@@ -59,7 +60,8 @@ export const config: Config = {
   basePort: int('BASE_PORT', 27015),
   firewall: bool('FIREWALL', false),
   gsltToken: str('GSLT_TOKEN', ''),
-  dbPath: resolve(str('DB_PATH', './data/launcher.db'))
+  dbPath: resolve(str('DB_PATH', './data/launcher.db')),
+  logDir: resolve(str('LOG_DIR', './data/logs'))
 }
 
 // Warn loudly when running with insecure defaults outside local dev.

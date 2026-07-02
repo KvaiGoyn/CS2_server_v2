@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
+import { mkdirSync, openSync } from 'node:fs'
+import { join } from 'node:path'
 import { config } from './config.js'
 import { buildCs2Args, openFirewallPort } from './platform.js'
 import {
@@ -74,15 +76,39 @@ export function launchServer(input: LaunchInput): LaunchResult {
     port
   })
 
+  // Redirect the server's stdout/stderr to a per-launch log file so we can
+  // diagnose crashes (spawn ENOENT, missing libs, bad cfg) instead of losing
+  // everything to /dev/null. One file per (port, launch time).
+  const launchedAt = Date.now()
+  let stdio: 'ignore' | ['ignore', number, number] = 'ignore'
+  let logPath: string | null = null
+  try {
+    mkdirSync(config.logDir, { recursive: true })
+    logPath = join(config.logDir, `${port}-${launchedAt}.log`)
+    const fd = openSync(logPath, 'a')
+    stdio = ['ignore', fd, fd]
+  } catch (err) {
+    // Logging is best-effort: if the dir/file can't be created, fall back to
+    // 'ignore' rather than blocking the launch.
+    console.error(`[manager] could not open log file, launching without logs:`, (err as Error).message)
+  }
+
   let child
   try {
     child = spawn(config.cs2Bin, args, {
       detached: true,
-      stdio: 'ignore'
+      stdio
     })
   } catch (err) {
     return { success: false, error: `Failed to spawn ${config.cs2Bin}: ${(err as Error).message}` }
   }
+
+  // On Linux, spawn failures (ENOENT/EACCES) surface asynchronously via the
+  // 'error' event, NOT as a throw — child.pid is undefined in that case.
+  // Log it so the reason ends up in journald instead of vanishing.
+  child.on('error', (err) => {
+    console.error(`[manager] spawn error for ${config.cs2Bin}:`, err.message)
+  })
 
   // Detach so the CS2 process outlives the backend if it restarts.
   child.unref()
@@ -101,7 +127,7 @@ export function launchServer(input: LaunchInput): LaunchResult {
     modeName: input.modeName || 'Custom',
     gameType: input.gameType,
     gameMode: input.gameMode,
-    launchedAt: Date.now(),
+    launchedAt,
     stoppedAt: null,
     status: 'running'
   }
