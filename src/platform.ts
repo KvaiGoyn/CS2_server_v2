@@ -32,17 +32,23 @@ export function buildCs2Args(p: LaunchParams): string[] {
   // Joining them (e.g. '+game_type 0') passes one arg with an embedded space,
   // which the engine parses correctly on Windows (it re-reads the raw command
   // line) but NOT on Linux (argv is taken verbatim). Keep them split.
+  //
+  // Port binding uses the '-port' launch flag, not the '+hostport' cvar.
+  // '-port' is read early during engine init and reliably binds the game
+  // socket, so multiple instances get distinct ports. '+hostport' is a cvar
+  // applied later and is not honored consistently across instances, which
+  // would collapse every server onto the default 27015.
   const args = [
     '-dedicated',
     '-usercon',
+    '-port',
+    String(p.port),
     '+game_type',
     p.gameType,
     '+game_mode',
     p.gameMode,
     '+map',
-    p.map,
-    '+hostport',
-    String(p.port)
+    p.map
   ]
 
   // GSLT is only needed for public/internet servers (Linux prod). Optional.
