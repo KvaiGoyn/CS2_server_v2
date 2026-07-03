@@ -46,7 +46,34 @@ export interface Config {
   gsltToken: string
   dbPath: string
   logDir: string
-  pluginsDir: string
+  csgoDir: string
+}
+
+// Resolve CSGO_DIR (preferred) or derive it from legacy PLUGINS_DIR by
+// walking up from .../addons/counterstrikesharp/plugins/ to the csgo root.
+function resolveCsgoDir(): string {
+  const explicit = process.env.CSGO_DIR
+  if (explicit && explicit !== '') return resolve(explicit)
+
+  const legacy = process.env.PLUGINS_DIR
+  if (legacy && legacy !== '') {
+    // Expect .../csgo/addons/counterstrikesharp/plugins → strip 3 segments.
+    const norm = resolve(legacy).replace(/\/+$/, '')
+    const segs = norm.split('/')
+    if (
+      segs.length >= 4 &&
+      segs[segs.length - 1] === 'plugins' &&
+      segs[segs.length - 2] === 'counterstrikesharp' &&
+      segs[segs.length - 3] === 'addons'
+    ) {
+      return segs.slice(0, -3).join('/')
+    }
+    console.warn(
+      `[config] PLUGINS_DIR="${legacy}" doesn't look like .../csgo/addons/counterstrikesharp/plugins. ` +
+        'Set CSGO_DIR explicitly for MatchZy-style plugins.'
+    )
+  }
+  return ''
 }
 
 export const config: Config = {
@@ -63,7 +90,7 @@ export const config: Config = {
   gsltToken: str('GSLT_TOKEN', ''),
   dbPath: resolve(str('DB_PATH', './data/launcher.db')),
   logDir: resolve(str('LOG_DIR', './data/logs')),
-  pluginsDir: resolve(str('PLUGINS_DIR', ''))
+  csgoDir: resolveCsgoDir()
 }
 
 // Warn loudly when running with insecure defaults outside local dev.
