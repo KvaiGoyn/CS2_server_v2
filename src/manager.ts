@@ -144,11 +144,15 @@ export function stopServer(id: string): { success: boolean; error?: string } {
 
   if (entry.status === 'running') {
     try {
-      process.kill(entry.pid)
+      // Kill the entire process group so cs2.sh wrapper and the forked engine
+      // process both die. process.kill with negative pid sends to the group.
+      process.kill(-entry.pid, 'SIGTERM')
     } catch (err) {
-      // ESRCH just means it already died; anything else we log but still mark stopped.
       const code = (err as NodeJS.ErrnoException).code
-      if (code !== 'ESRCH') {
+      if (code === 'ESRCH') {
+        // Group already gone — try killing just the pid as fallback
+        try { process.kill(entry.pid, 'SIGTERM') } catch { /* already dead */ }
+      } else {
         console.error(`[manager] failed to kill pid ${entry.pid}:`, (err as Error).message)
       }
     }
