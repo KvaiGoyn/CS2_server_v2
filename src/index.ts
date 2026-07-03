@@ -13,6 +13,7 @@ import {
   stopServer,
   type LaunchInput
 } from './manager.js'
+import { listPlugins, installPlugin, deletePlugin } from './plugins.js'
 import type { ServerRow } from './db.js'
 
 // JWT payload shape we sign and expect back.
@@ -117,6 +118,35 @@ app.post('/servers/:id/stop', { preHandler: requireAuth }, async (req, reply) =>
 
 app.delete('/servers/stopped', { preHandler: requireAuth }, async () => {
   return clearStopped()
+})
+
+// --- Plugin routes ---
+
+app.get('/plugins', { preHandler: requireAuth }, async () => {
+  return listPlugins()
+})
+
+app.post('/plugins/install', { preHandler: requireAuth }, async (req, reply) => {
+  const body = (req.body ?? {}) as { url?: unknown }
+  if (typeof body.url !== 'string' || !body.url) {
+    return reply.code(400).send({ error: 'url is required' })
+  }
+  try {
+    const result = await installPlugin(body.url)
+    return result
+  } catch (err) {
+    return reply.code(500).send({ error: (err as Error).message })
+  }
+})
+
+app.delete('/plugins/:name', { preHandler: requireAuth }, async (req, reply) => {
+  const { name } = req.params as { name: string }
+  try {
+    deletePlugin(name)
+    return { success: true }
+  } catch (err) {
+    return reply.code(404).send({ error: (err as Error).message })
+  }
 })
 
 // --- WebSocket: live server-status stream ---
