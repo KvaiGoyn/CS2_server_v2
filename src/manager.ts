@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { mkdirSync, openSync } from 'node:fs'
+import { mkdirSync, openSync, writeFileSync, chmodSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { config } from './config.js'
 import { buildCs2Args, openFirewallPort } from './platform.js'
@@ -12,8 +12,12 @@ import {
   listRunningServers,
   listServers,
   markServerStopped,
+  getPreset,
+  getMatchConfig,
   type ServerRow
 } from './db.js'
+import { RconManager } from './rcon.js'
+import { MatchPoller, type LiveMatch } from './match-poller.js'
 
 /**
  * Emits 'servers-updated' with the full server list whenever state changes.
@@ -21,8 +25,28 @@ import {
  */
 export const events = new EventEmitter()
 
+const rconManagers = new Map<string, RconManager>()
+const matchPollers = new Map<string, MatchPoller>()
+
 function broadcast(): void {
   events.emit('servers-updated', listServers())
+}
+
+function hashPassword(password: string): string {
+  return createHash('sha256').update(password).digest('hex')
+}
+
+function extractRconPassword(csgoDir: string): string | null {
+  if (!csgoDir) return null
+  const configPath = join(csgoDir, 'addons/counterstrikesharp/plugins/MatchZy/MatchZy_config.cfg')
+  if (!existsSync(configPath)) return null
+  try {
+    const content = readFileSync(configPath, 'utf-8')
+    const match = content.match(/rcon_password\s+"([^"]+)"/)
+    return match ? match[1] : null
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -49,12 +73,27 @@ function isPidAlive(pid: number): boolean {
   }
 }
 
+function writeServerConfig(cfg: string): string {
+  const filename = `/tmp/cs2-config-${randomUUID()}.cfg`
+  try {
+    writeFileSync(filename, cfg, 'utf-8')
+    chmodSync(filename, 0o666)
+    console.log(`[manager] wrote config to ${filename}`)
+  } catch (err) {
+    console.error(`[manager] failed to write config to ${filename}:`, (err as Error).message)
+    throw err
+  }
+  return filename
+}
+
 export interface LaunchInput {
   gameType: string
   gameMode: string
   modeName: string
   map: string
   mapLabel: string
+  presetId?: string
+  matchConfigId?: string
 }
 
 export interface LaunchResult {
@@ -69,11 +108,24 @@ export function launchServer(input: LaunchInput): LaunchResult {
 
   openFirewallPort(port)
 
+  let configPath: string | undefined
+  if (input.presetId) {
+    const preset = getPreset(input.presetId)
+    if (preset) {
+      try {
+        configPath = writeServerConfig(preset.configContent)
+      } catch (err) {
+        return { success: false, error: `Failed to write preset config: ${(err as Error).message}` }
+      }
+    }
+  }
+
   const args = buildCs2Args({
     gameType: input.gameType,
     gameMode: input.gameMode,
     map: input.map,
-    port
+    port,
+    configPath
   })
 
   // Redirect the server's stdout/stderr to a per-launch log file so we can
@@ -117,6 +169,10 @@ export function launchServer(input: LaunchInput): LaunchResult {
     return { success: false, error: 'Spawn returned no PID' }
   }
 
+  const rconPort = port + 1
+  const rconPassword = extractRconPassword(config.csgoDir)
+  const passwordHash = rconPassword ? hashPassword(rconPassword) : undefined
+
   const row: ServerRow = {
     id: randomUUID(),
     pid: child.pid,
@@ -129,13 +185,70 @@ export function launchServer(input: LaunchInput): LaunchResult {
     gameMode: input.gameMode,
     launchedAt,
     stoppedAt: null,
-    status: 'running'
+    status: 'running',
+    rcon_port: rconPort,
+    rcon_password_hash: passwordHash
   }
 
   insertServer(row)
+
+  // Initialize RCON manager for this server if password was found
+  if (rconPassword) {
+    const rconManager = new RconManager(port, rconPassword)
+    rconManagers.set(row.id, rconManager)
+    console.log(`[manager] RCON initialized for server ${row.id} on port ${rconPort}`)
+
+    if (input.matchConfigId) {
+      startMatchPoller(row.id, rconManager, input.matchConfigId, input.map)
+    }
+  }
+
   broadcast()
 
   return { success: true, id: row.id, port }
+}
+
+function startMatchPoller(
+  serverId: string,
+  rconManager: RconManager,
+  matchConfigId: string,
+  map: string
+): void {
+  const matchConfig = getMatchConfig(matchConfigId)
+  if (!matchConfig) return
+
+  let maxRounds = 24
+  try {
+    const convars = JSON.parse(matchConfig.convars) as Record<string, string>
+    if (convars.mp_maxrounds) {
+      const parsed = parseInt(convars.mp_maxrounds, 10)
+      if (!Number.isNaN(parsed)) maxRounds = parsed
+    }
+  } catch {
+    // convars isn't valid JSON — fall back to the default maxRounds
+  }
+
+  const poller = new MatchPoller(
+    rconManager,
+    serverId,
+    map,
+    matchConfig.team1_name,
+    matchConfig.team2_name,
+    maxRounds,
+    events
+  )
+  poller.start()
+  matchPollers.set(serverId, poller)
+  console.log(`[manager] match poller started for server ${serverId}`)
+}
+
+export function getLiveMatches(): LiveMatch[] {
+  const states: LiveMatch[] = []
+  for (const poller of matchPollers.values()) {
+    const state = poller.getState()
+    if (state) states.push(state)
+  }
+  return states
 }
 
 export function stopServer(id: string): { success: boolean; error?: string } {
@@ -156,10 +269,38 @@ export function stopServer(id: string): { success: boolean; error?: string } {
         console.error(`[manager] failed to kill pid ${entry.pid}:`, (err as Error).message)
       }
     }
+    // Clean up match poller
+    const poller = matchPollers.get(id)
+    if (poller) {
+      poller.stop()
+      matchPollers.delete(id)
+    }
+    // Clean up RCON manager
+    const rconMgr = rconManagers.get(id)
+    if (rconMgr) {
+      rconMgr.close()
+      rconManagers.delete(id)
+    }
     markServerStopped(id, Date.now())
     broadcast()
   }
   return { success: true }
+}
+
+export async function executeRconCommand(
+  serverId: string,
+  command: string
+): Promise<{ success: boolean; message?: string }> {
+  const rconMgr = rconManagers.get(serverId)
+  if (!rconMgr) {
+    return { success: false, message: 'RCON not available for this server' }
+  }
+  try {
+    const response = await rconMgr.execute(command)
+    return { success: true, message: response }
+  } catch (err) {
+    return { success: false, message: (err as Error).message }
+  }
 }
 
 export function clearStopped(): { success: boolean } {

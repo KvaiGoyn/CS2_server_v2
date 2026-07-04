@@ -2,19 +2,44 @@ import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify'
 import cors from '@fastify/cors'
 import jwt from '@fastify/jwt'
 import websocket from '@fastify/websocket'
+import { readFileSync, existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { dirname } from 'node:path'
 import { config } from './config.js'
 import { authenticate, seedFirstUser } from './auth.js'
 import {
   clearStopped,
   events,
   getServers,
+  getLiveMatches,
   launchServer,
   startReconcileLoop,
   stopServer,
+  executeRconCommand,
   type LaunchInput
 } from './manager.js'
+import type { LiveMatch } from './match-poller.js'
 import { listPlugins, installPlugin, deletePlugin } from './plugins.js'
+import {
+  insertPreset,
+  listPresets,
+  getPreset,
+  updatePreset,
+  deletePreset,
+  seedDefaultPresets,
+  insertMatchConfig,
+  listMatchConfigs,
+  getMatchConfig,
+  updateMatchConfig,
+  deleteMatchConfig,
+  type PresetRow,
+  type MatchConfigRow
+} from './db.js'
 import type { ServerRow } from './db.js'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const publicPath = join(__dirname, '../out/renderer')
 
 // JWT payload shape we sign and expect back.
 interface TokenPayload {
@@ -98,7 +123,9 @@ app.post('/servers', { preHandler: requireAuth }, async (req, reply) => {
     gameMode: body.gameMode as string,
     modeName: body.modeName as string,
     map: body.map as string,
-    mapLabel: body.mapLabel as string
+    mapLabel: body.mapLabel as string,
+    presetId: typeof body.presetId === 'string' ? body.presetId : undefined,
+    matchConfigId: typeof body.matchConfigId === 'string' ? body.matchConfigId : undefined
   })
 
   if (!result.success) {
@@ -149,6 +176,230 @@ app.delete('/plugins/:name', { preHandler: requireAuth }, async (req, reply) => 
   }
 })
 
+// --- Preset routes ---
+
+app.get('/presets', { preHandler: requireAuth }, async () => {
+  return listPresets()
+})
+
+app.post('/presets', { preHandler: requireAuth }, async (req, reply) => {
+  const body = (req.body ?? {}) as Partial<PresetRow>
+  const required = ['name', 'gameType', 'gameMode', 'map', 'configContent']
+
+  for (const f of required) {
+    if (typeof body[f as keyof PresetRow] !== 'string' || (body[f as keyof PresetRow] as string).length === 0) {
+      return reply.code(400).send({ error: `Missing or invalid field: ${f}` })
+    }
+  }
+
+  try {
+    const { randomUUID } = await import('node:crypto')
+    const id = randomUUID()
+    insertPreset({
+      id,
+      name: body.name as string,
+      description: body.description ?? '',
+      gameType: body.gameType as string,
+      gameMode: body.gameMode as string,
+      map: body.map as string,
+      configContent: body.configContent as string,
+      createdAt: Date.now()
+    })
+    return { success: true, id }
+  } catch (err) {
+    return reply.code(400).send({ error: (err as Error).message })
+  }
+})
+
+app.get('/presets/:id', { preHandler: requireAuth }, async (req, reply) => {
+  const { id } = req.params as { id: string }
+  const preset = getPreset(id)
+  if (!preset) {
+    return reply.code(404).send({ error: 'Preset not found' })
+  }
+  return preset
+})
+
+app.put('/presets/:id', { preHandler: requireAuth }, async (req, reply) => {
+  const { id } = req.params as { id: string }
+  const preset = getPreset(id)
+  if (!preset) {
+    return reply.code(404).send({ error: 'Preset not found' })
+  }
+
+  const body = (req.body ?? {}) as Partial<PresetRow>
+  try {
+    updatePreset(id, {
+      name: body.name ?? preset.name,
+      description: body.description ?? preset.description,
+      gameType: body.gameType ?? preset.gameType,
+      gameMode: body.gameMode ?? preset.gameMode,
+      map: body.map ?? preset.map,
+      configContent: body.configContent ?? preset.configContent
+    })
+    return { success: true }
+  } catch (err) {
+    return reply.code(400).send({ error: (err as Error).message })
+  }
+})
+
+app.delete('/presets/:id', { preHandler: requireAuth }, async (req, reply) => {
+  const { id } = req.params as { id: string }
+  const preset = getPreset(id)
+  if (!preset) {
+    return reply.code(404).send({ error: 'Preset not found' })
+  }
+  deletePreset(id)
+  return { success: true }
+})
+
+// --- Match Config routes ---
+
+app.get('/match-configs', { preHandler: requireAuth }, async () => {
+  return listMatchConfigs()
+})
+
+app.post('/match-configs', { preHandler: requireAuth }, async (req, reply) => {
+  const body = (req.body ?? {}) as Partial<MatchConfigRow>
+  const required = ['name', 'map', 'team1_name', 'team2_name']
+
+  for (const f of required) {
+    if (typeof body[f as keyof MatchConfigRow] !== 'string' || (body[f as keyof MatchConfigRow] as string).length === 0) {
+      return reply.code(400).send({ error: `Missing or invalid field: ${f}` })
+    }
+  }
+
+  try {
+    const { randomUUID } = await import('node:crypto')
+    const id = randomUUID()
+    insertMatchConfig({
+      id,
+      name: body.name as string,
+      description: body.description ?? '',
+      map: body.map as string,
+      team1_name: body.team1_name as string,
+      team2_name: body.team2_name as string,
+      convars: body.convars ?? '{}',
+      createdAt: Date.now()
+    })
+    return { success: true, id }
+  } catch (err) {
+    return reply.code(400).send({ error: (err as Error).message })
+  }
+})
+
+app.get('/match-configs/:id', { preHandler: requireAuth }, async (req, reply) => {
+  const { id } = req.params as { id: string }
+  const config = getMatchConfig(id)
+  if (!config) {
+    return reply.code(404).send({ error: 'Match config not found' })
+  }
+  return config
+})
+
+app.put('/match-configs/:id', { preHandler: requireAuth }, async (req, reply) => {
+  const { id } = req.params as { id: string }
+  const config = getMatchConfig(id)
+  if (!config) {
+    return reply.code(404).send({ error: 'Match config not found' })
+  }
+
+  const body = (req.body ?? {}) as Partial<MatchConfigRow>
+  try {
+    updateMatchConfig(id, {
+      name: body.name ?? config.name,
+      description: body.description ?? config.description,
+      map: body.map ?? config.map,
+      team1_name: body.team1_name ?? config.team1_name,
+      team2_name: body.team2_name ?? config.team2_name,
+      convars: body.convars ?? config.convars
+    })
+    return { success: true }
+  } catch (err) {
+    return reply.code(400).send({ error: (err as Error).message })
+  }
+})
+
+app.delete('/match-configs/:id', { preHandler: requireAuth }, async (req, reply) => {
+  const { id } = req.params as { id: string }
+  const config = getMatchConfig(id)
+  if (!config) {
+    return reply.code(404).send({ error: 'Match config not found' })
+  }
+  deleteMatchConfig(id)
+  return { success: true }
+})
+
+// --- RCON routes ---
+
+app.post('/servers/:id/rcon', { preHandler: requireAuth }, async (req, reply) => {
+  const { id } = req.params as { id: string }
+  const body = (req.body ?? {}) as { command?: unknown }
+
+  if (typeof body.command !== 'string' || !body.command.trim()) {
+    return reply.code(400).send({ error: 'command is required' })
+  }
+
+  const result = await executeRconCommand(id, body.command)
+  if (!result.success) {
+    return reply.code(500).send(result)
+  }
+  return result
+})
+
+// --- Live match routes ---
+
+app.get('/live-matches', { preHandler: requireAuth }, async () => {
+  return getLiveMatches()
+})
+
+// --- Static file serving for SPA ---
+const rendererPath = join(__dirname, '../out/renderer')
+console.log(`[static] serving frontend from: ${rendererPath}`)
+
+function getMimeType(filePath: string): string {
+  if (filePath.endsWith('.js')) return 'application/javascript'
+  if (filePath.endsWith('.css')) return 'text/css'
+  if (filePath.endsWith('.html')) return 'text/html'
+  if (filePath.endsWith('.png')) return 'image/png'
+  if (filePath.endsWith('.jpg')) return 'image/jpeg'
+  if (filePath.endsWith('.svg')) return 'image/svg+xml'
+  if (filePath.endsWith('.woff2')) return 'font/woff2'
+  return 'application/octet-stream'
+}
+
+app.get('/', async (req, reply) => {
+  const indexPath = join(rendererPath, 'index.html')
+  console.log(`[static] GET / checking: ${indexPath} exists=${existsSync(indexPath)}`)
+  if (existsSync(indexPath)) {
+    const content = readFileSync(indexPath)
+    reply.type('text/html')
+    return reply.send(content)
+  }
+  return reply.code(404).send({ error: 'Frontend not built' })
+})
+
+app.get('/assets/*', async (req, reply) => {
+  const filePath = join(rendererPath, 'assets', (req.params as { '*': string })['*'])
+  if (existsSync(filePath)) {
+    const content = readFileSync(filePath)
+    reply.type(getMimeType(filePath))
+    return reply.send(content)
+  }
+  return reply.code(404).send({ error: 'Asset not found' })
+})
+
+// Fallback: any other route -> index.html (for SPA routing)
+app.get('/*', async (req, reply) => {
+  const indexPath = join(rendererPath, 'index.html')
+  if (existsSync(indexPath)) {
+    const content = readFileSync(indexPath)
+    reply.type('text/html')
+    return reply.send(content)
+  }
+  return reply.code(404).send({ error: 'Frontend not built' })
+})
+
 // --- WebSocket: live server-status stream ---
 // Browsers/Electron can't set Authorization on a WS handshake, so the token
 // comes in as ?token=<jwt> and is verified before the socket is accepted.
@@ -172,12 +423,23 @@ app.register(async (scoped) => {
       }
     }
 
+    const sendMatch = (match: LiveMatch): void => {
+      if (socket.readyState === socket.OPEN) {
+        socket.send(JSON.stringify({ type: 'match-updated', match }))
+      }
+    }
+
     send(getServers())
+    for (const match of getLiveMatches()) sendMatch(match)
+
     const listener = (servers: ServerRow[]): void => send(servers)
+    const matchListener = (match: LiveMatch): void => sendMatch(match)
     events.on('servers-updated', listener)
+    events.on('match-updated', matchListener)
 
     socket.on('close', () => {
       events.off('servers-updated', listener)
+      events.off('match-updated', matchListener)
     })
   })
 })
@@ -188,6 +450,8 @@ async function start(): Promise<void> {
   if (created) {
     app.log.info(`Seeded first user "${config.seedUsername}" (change the password!)`)
   }
+
+  seedDefaultPresets()
 
   startReconcileLoop()
 

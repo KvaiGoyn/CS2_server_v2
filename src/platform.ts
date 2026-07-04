@@ -21,6 +21,7 @@ export interface LaunchParams {
   gameMode: string
   map: string
   port: number
+  configPath?: string
 }
 
 /**
@@ -50,6 +51,11 @@ export function buildCs2Args(p: LaunchParams): string[] {
     '+map',
     p.map
   ]
+
+  // Preset config file execution (runs before extra args so they can override).
+  if (p.configPath) {
+    args.push('+exec', p.configPath)
+  }
 
   // GSLT is only needed for public/internet servers (Linux prod). Optional.
   if (config.gsltToken) {
