@@ -139,6 +139,18 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_rcon_commands_created ON rcon_commands(created_at);
 `)
 
+// CREATE TABLE IF NOT EXISTS leaves pre-existing tables (e.g. from an older
+// deploy) untouched, so columns added later need an explicit migration here.
+function addColumnIfMissing(table: string, column: string, definition: string): void {
+  const existing = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+  if (!existing.some((col) => col.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`)
+  }
+}
+
+addColumnIfMissing('servers', 'rcon_port', 'INTEGER')
+addColumnIfMissing('servers', 'rcon_password_hash', 'TEXT')
+
 // --- User statements ---
 const insertUserStmt = db.prepare(
   `INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)`
