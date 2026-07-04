@@ -47,6 +47,11 @@ export interface Config {
   dbPath: string
   logDir: string
   csgoDir: string
+  autoUpdateCs2: boolean
+  steamCmdBin: string
+  cs2InstallDir: string
+  cs2AppId: string
+  steamCmdTimeoutMs: number
 }
 
 // Resolve CSGO_DIR (preferred) or derive it from legacy PLUGINS_DIR by
@@ -90,7 +95,12 @@ export const config: Config = {
   gsltToken: str('GSLT_TOKEN', ''),
   dbPath: resolve(str('DB_PATH', './data/launcher.db')),
   logDir: resolve(str('LOG_DIR', './data/logs')),
-  csgoDir: resolveCsgoDir()
+  csgoDir: resolveCsgoDir(),
+  autoUpdateCs2: bool('AUTO_UPDATE_CS2', false),
+  steamCmdBin: str('STEAMCMD_BIN', 'steamcmd'),
+  cs2InstallDir: str('CS2_INSTALL_DIR', ''),
+  cs2AppId: str('CS2_APP_ID', '730'),
+  steamCmdTimeoutMs: int('STEAMCMD_TIMEOUT_MS', 300000)
 }
 
 // Warn loudly when running with insecure defaults outside local dev.
@@ -98,5 +108,12 @@ if (config.jwtSecret === 'dev-only-change-me' && config.host !== '127.0.0.1') {
   console.warn(
     '[config] WARNING: default JWT_SECRET is in use while binding beyond localhost. ' +
       'Set a strong JWT_SECRET before exposing this backend.'
+  )
+}
+
+if (config.autoUpdateCs2 && config.cs2InstallDir === '') {
+  console.warn(
+    '[config] WARNING: AUTO_UPDATE_CS2 is enabled but CS2_INSTALL_DIR is not set. ' +
+      'steamcmd needs -force_install_dir to know where the server lives; updates will be skipped.'
   )
 }

@@ -18,6 +18,7 @@ import {
 } from './db.js'
 import { RconManager } from './rcon.js'
 import { MatchPoller, type LiveMatch } from './match-poller.js'
+import { updateCs2Server } from './steamcmd.js'
 
 /**
  * Emits 'servers-updated' with the full server list whenever state changes.
@@ -103,10 +104,20 @@ export interface LaunchResult {
   error?: string
 }
 
-export function launchServer(input: LaunchInput): LaunchResult {
+export async function launchServer(input: LaunchInput): Promise<LaunchResult> {
   const port = getNextAvailablePort()
 
   openFirewallPort(port)
+
+  if (config.autoUpdateCs2) {
+    console.log('[manager] checking for CS2 updates via steamcmd...')
+    const update = await updateCs2Server()
+    if (!update.success) {
+      console.error(`[manager] steamcmd update failed, launching with current install: ${update.error}`)
+    } else {
+      console.log('[manager] steamcmd update check complete')
+    }
+  }
 
   let configPath: string | undefined
   if (input.presetId) {

@@ -118,7 +118,7 @@ app.post('/servers', { preHandler: requireAuth }, async (req, reply) => {
     }
   }
 
-  const result = launchServer({
+  const result = await launchServer({
     gameType: body.gameType as string,
     gameMode: body.gameMode as string,
     modeName: body.modeName as string,
