@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { config } from './config.js'
 
 /**
@@ -66,4 +68,38 @@ export function buildCs2Args(p: LaunchParams): string[] {
   args.push(...config.cs2ExtraArgs)
 
   return args
+}
+
+const METAMOD_SEARCH_PATH = 'Game\t\tcsgo/addons/metamod'
+
+/**
+ * steamcmd's app_update validate step overwrites csgo/gameinfo.gi with the
+ * stock version, silently dropping the Metamod search path that Metamod's
+ * own installer adds. Re-insert it after every steamcmd run so CSSharp
+ * plugins keep loading. Idempotent and best-effort: a missing/unwritable
+ * gameinfo.gi must not block the server launch.
+ */
+export function ensureMetamodHook(): void {
+  if (!config.csgoDir) return
+
+  const gameinfoPath = join(config.csgoDir, 'gameinfo.gi')
+  if (!existsSync(gameinfoPath)) return
+
+  try {
+    const content = readFileSync(gameinfoPath, 'utf-8')
+    if (content.includes('csgo/addons/metamod')) return
+
+    const lines = content.split('\n')
+    const gameLineIndex = lines.findIndex((line) => /^\s*Game\s+csgo\s*$/.test(line))
+    if (gameLineIndex === -1) {
+      console.error('[platform] could not find "Game csgo" search path in gameinfo.gi, skipping metamod hook')
+      return
+    }
+
+    lines.splice(gameLineIndex + 1, 0, `\t\t\t${METAMOD_SEARCH_PATH.trim()}`)
+    writeFileSync(gameinfoPath, lines.join('\n'), 'utf-8')
+    console.log('[platform] re-inserted metamod search path into gameinfo.gi')
+  } catch (err) {
+    console.error('[platform] failed to patch gameinfo.gi:', (err as Error).message)
+  }
 }

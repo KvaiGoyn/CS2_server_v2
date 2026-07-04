@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events'
 import { mkdirSync, openSync, writeFileSync, chmodSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { config } from './config.js'
-import { buildCs2Args, openFirewallPort } from './platform.js'
+import { buildCs2Args, openFirewallPort, ensureMetamodHook } from './platform.js'
 import {
   deleteStoppedServers,
   getServer,
@@ -117,6 +117,7 @@ export async function launchServer(input: LaunchInput): Promise<LaunchResult> {
     } else {
       console.log('[manager] steamcmd update check complete')
     }
+    ensureMetamodHook()
   }
 
   let configPath: string | undefined
