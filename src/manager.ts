@@ -19,6 +19,7 @@ import {
 import { RconManager } from './rcon.js'
 import { MatchPoller, type LiveMatch } from './match-poller.js'
 import { updateCs2Server } from './steamcmd.js'
+import { buildMatchJson, writeMatchFile, loadMatchWithRetry } from './matchzy.js'
 
 /**
  * Emits 'servers-updated' with the full server list whenever state changes.
@@ -211,6 +212,7 @@ export async function launchServer(input: LaunchInput): Promise<LaunchResult> {
     console.log(`[manager] RCON initialized for server ${row.id} on port ${rconPort}`)
 
     if (input.matchConfigId) {
+      loadMatchZyConfig(rconManager, input.matchConfigId, input.map)
       startMatchPoller(row.id, rconManager, input.matchConfigId, input.map)
     }
   }
@@ -218,6 +220,34 @@ export async function launchServer(input: LaunchInput): Promise<LaunchResult> {
   broadcast()
 
   return { success: true, id: row.id, port }
+}
+
+/**
+ * Hand the match's convars to MatchZy by loading a generated match JSON.
+ * Fire-and-forget: MatchZy needs the map+plugin to finish loading, so the
+ * load retries in the background (see loadMatchWithRetry). Failures are
+ * logged, never thrown — a failed load must not kill an otherwise-live server.
+ */
+function loadMatchZyConfig(
+  rconManager: RconManager,
+  matchConfigId: string,
+  launchMap: string
+): void {
+  const matchConfig = getMatchConfig(matchConfigId)
+  if (!matchConfig) return
+
+  let filename: string
+  try {
+    const json = buildMatchJson(matchConfig, launchMap)
+    filename = writeMatchFile(matchConfig.id, json)
+  } catch (err) {
+    console.error(`[manager] failed to write MatchZy match file:`, (err as Error).message)
+    return
+  }
+
+  void loadMatchWithRetry(rconManager, filename).catch((err) => {
+    console.error(`[manager] MatchZy loadmatch failed:`, (err as Error).message)
+  })
 }
 
 function startMatchPoller(
