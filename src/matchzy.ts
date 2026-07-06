@@ -45,23 +45,48 @@ function parseCvars(raw: string): Record<string, string> {
 }
 
 /**
+ * Point MatchZy's remote-log webhook at this backend for a given server.
+ *
+ * `matchzy_remote_log_url` makes MatchZy POST every match event (go-live,
+ * round end, series result, etc.) to us as JSON, instead of the launcher
+ * polling `status` and regex-parsing text the engine never guaranteed a
+ * stable shape for. `matchzy_remote_log_header_key/value` lets the webhook
+ * route verify the request actually came from this CS2 instance.
+ */
+function webhookCvars(serverId: string): Record<string, string> {
+  return {
+    matchzy_remote_log_url: `http://127.0.0.1:${config.port}/webhooks/matchzy/${serverId}`,
+    matchzy_remote_log_header_key: 'x-matchzy-secret',
+    matchzy_remote_log_header_value: config.matchzyWebhookSecret
+  }
+}
+
+/**
  * Build a MatchZy match JSON from a stored match config.
  *
  * Player rosters are left empty: the current match config schema stores only
  * team names, not Steam64 IDs, so MatchZy runs as an open match and assigns
  * players as they connect. The `cvars` object carries the operator-defined
  * convars, which is the whole point — MatchZy re-applies them on go-live.
+ *
+ * `matchid` is the server's own id, not the match config's — a match config
+ * can be reused across multiple simultaneously-running servers, and the
+ * webhook route needs a matchid that uniquely identifies one running server.
  */
-export function buildMatchJson(matchConfig: MatchConfigRow, launchMap: string): MatchJson {
+export function buildMatchJson(
+  matchConfig: MatchConfigRow,
+  launchMap: string,
+  serverId: string
+): MatchJson {
   const map = matchConfig.map || launchMap
   return {
-    matchid: matchConfig.id,
+    matchid: serverId,
     num_maps: 1,
     maplist: [map],
     players_per_team: 5,
     team1: { name: matchConfig.team1_name, players: {} },
     team2: { name: matchConfig.team2_name, players: {} },
-    cvars: parseCvars(matchConfig.convars)
+    cvars: { ...parseCvars(matchConfig.convars), ...webhookCvars(serverId) }
   }
 }
 
@@ -100,16 +125,20 @@ export function parseCfgCvars(raw: string): Record<string, string> {
  * derives display names from connected players' own team assignment/nicknames
  * when a match runs open (no player Steam64 roster), so nothing else is needed.
  */
-export function buildMatchJsonFromPreset(preset: PresetRow, launchMap: string): MatchJson {
+export function buildMatchJsonFromPreset(
+  preset: PresetRow,
+  launchMap: string,
+  serverId: string
+): MatchJson {
   const map = preset.map || launchMap
   return {
-    matchid: preset.id,
+    matchid: serverId,
     num_maps: 1,
     maplist: [map],
     players_per_team: 5,
     team1: { name: 'Team 1', players: {} },
     team2: { name: 'Team 2', players: {} },
-    cvars: parseCfgCvars(preset.configContent)
+    cvars: { ...parseCfgCvars(preset.configContent), ...webhookCvars(serverId) }
   }
 }
 

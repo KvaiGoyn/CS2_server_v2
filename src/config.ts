@@ -1,5 +1,6 @@
 import 'dotenv/config'
 import { resolve } from 'node:path'
+import { randomBytes } from 'node:crypto'
 
 function str(name: string, fallback?: string): string {
   const v = process.env[name]
@@ -46,6 +47,7 @@ export interface Config {
   gsltToken: string
   rconPassword: string
   rconHost: string
+  matchzyWebhookSecret: string
   dbPath: string
   logDir: string
   csgoDir: string
@@ -97,6 +99,7 @@ export const config: Config = {
   gsltToken: str('GSLT_TOKEN', ''),
   rconPassword: str('RCON_PASSWORD', ''),
   rconHost: str('RCON_HOST', '127.0.0.1'),
+  matchzyWebhookSecret: str('MATCHZY_WEBHOOK_SECRET', randomBytes(16).toString('hex')),
   dbPath: resolve(str('DB_PATH', './data/launcher.db')),
   logDir: resolve(str('LOG_DIR', './data/logs')),
   csgoDir: resolveCsgoDir(),

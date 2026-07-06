@@ -223,10 +223,10 @@ export async function launchServer(input: LaunchInput): Promise<LaunchResult> {
     console.log(`[manager] RCON initialized for server ${row.id} on port ${rconPort}`)
 
     if (input.matchConfigId) {
-      loadMatchZyConfig(rconManager, input.matchConfigId, input.map)
+      loadMatchZyConfig(rconManager, input.matchConfigId, input.map, row.id)
       startMatchPoller(row.id, rconManager, input.matchConfigId, input.map)
     } else if (input.presetId && preset) {
-      loadMatchZyPreset(rconManager, preset, input.map)
+      loadMatchZyPreset(rconManager, preset, input.map, row.id)
       startMatchPollerFromPreset(row.id, rconManager, preset, input.map)
     }
   }
@@ -245,15 +245,16 @@ export async function launchServer(input: LaunchInput): Promise<LaunchResult> {
 function loadMatchZyConfig(
   rconManager: RconManager,
   matchConfigId: string,
-  launchMap: string
+  launchMap: string,
+  serverId: string
 ): void {
   const matchConfig = getMatchConfig(matchConfigId)
   if (!matchConfig) return
 
   let filename: string
   try {
-    const json = buildMatchJson(matchConfig, launchMap)
-    filename = writeMatchFile(matchConfig.id, json)
+    const json = buildMatchJson(matchConfig, launchMap, serverId)
+    filename = writeMatchFile(serverId, json)
   } catch (err) {
     console.error(`[manager] failed to write MatchZy match file:`, (err as Error).message)
     return
@@ -304,11 +305,16 @@ function startMatchPoller(
  * rules (e.g. mp_maxrounds, mp_freezetime) survive MatchZy's warmup->live
  * convar reset, without requiring a separate match-config entity.
  */
-function loadMatchZyPreset(rconManager: RconManager, preset: PresetRow, launchMap: string): void {
+function loadMatchZyPreset(
+  rconManager: RconManager,
+  preset: PresetRow,
+  launchMap: string,
+  serverId: string
+): void {
   let filename: string
   try {
-    const json = buildMatchJsonFromPreset(preset, launchMap)
-    filename = writeMatchFile(preset.id, json)
+    const json = buildMatchJsonFromPreset(preset, launchMap, serverId)
+    filename = writeMatchFile(serverId, json)
   } catch (err) {
     console.error(`[manager] failed to write MatchZy match file from preset:`, (err as Error).message)
     return

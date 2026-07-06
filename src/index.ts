@@ -353,6 +353,22 @@ app.get('/live-matches', { preHandler: requireAuth }, async () => {
   return getLiveMatches()
 })
 
+// --- MatchZy webhook (remote_log) ---
+// MatchZy can't hold a JWT, so this route is authenticated with a shared
+// secret sent via the x-matchzy-secret header (matchzy_remote_log_header_key
+// /value cvars in the generated match JSON) instead of requireAuth.
+app.post('/webhooks/matchzy/:serverId', async (req, reply) => {
+  const { serverId } = req.params as { serverId: string }
+  const secret = req.headers['x-matchzy-secret']
+
+  if (secret !== config.matchzyWebhookSecret) {
+    return reply.code(401).send({ error: 'invalid webhook secret' })
+  }
+
+  console.log(`[matchzy-webhook] ${serverId}`, JSON.stringify(req.body))
+  return { success: true }
+})
+
 // --- Static file serving for SPA ---
 const rendererPath = join(__dirname, '../out/renderer')
 console.log(`[static] serving frontend from: ${rendererPath}`)
