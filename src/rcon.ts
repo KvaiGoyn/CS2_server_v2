@@ -7,11 +7,11 @@ const PACKET_TYPE_RESPONSE_VALUE = 0
 
 interface PendingExec {
   requestId: number
-  mirrorId: number
   chunks: string[]
   resolve: (value: string) => void
   reject: (err: Error) => void
   timeout: NodeJS.Timeout
+  quietTimer: NodeJS.Timeout | null
 }
 
 function encodePacket(id: number, type: number, body: string): Buffer {
@@ -30,10 +30,16 @@ function encodePacket(id: number, type: number, body: string): Buffer {
 /**
  * Minimal Source RCON client. The `rcon` npm package can't be installed in
  * this environment (registry access is blocked) and the wire protocol is
- * small, so it's implemented directly here. Multi-packet responses are
- * detected with the standard "mirror packet" trick: a second, empty
- * EXECCOMMAND is sent right after the real one, and everything received
- * before its echo comes back belongs to the real response.
+ * small, so it's implemented directly here.
+ *
+ * Multi-packet responses are collected with a "quiet period" approach: every
+ * SERVERDATA_RESPONSE_VALUE packet matching a pending request's id resets a
+ * short timer, and the response resolves once no more packets arrive for
+ * quietMs. This avoids the classic "mirror packet" trick (send an empty
+ * EXECCOMMAND right after and wait for its echo), which is unreliable here —
+ * CS2 does not guarantee it processes/replies to queued commands in the order
+ * they were sent, so the empty marker's response can race ahead of the real
+ * command's data and get misread as "response complete, no data".
  */
 export class RconManager {
   private socket: Socket | null = null
@@ -43,6 +49,7 @@ export class RconManager {
   private nextId = 1
   private pendingExecs = new Map<number, PendingExec>()
   private readonly execTimeoutMs = 8000
+  private readonly quietMs = 150
 
   constructor(
     private readonly port: number,
@@ -118,18 +125,20 @@ export class RconManager {
 
     if (type !== PACKET_TYPE_RESPONSE_VALUE) return
 
-    for (const pending of this.pendingExecs.values()) {
-      if (id === pending.requestId) {
-        pending.chunks.push(body)
-        return
-      }
-      if (id === pending.mirrorId) {
-        clearTimeout(pending.timeout)
-        this.pendingExecs.delete(pending.requestId)
-        pending.resolve(pending.chunks.join(''))
-        return
-      }
-    }
+    const pending = this.pendingExecs.get(id)
+    if (!pending) return
+
+    pending.chunks.push(body)
+
+    // Reset the quiet-period timer: as long as packets keep arriving for
+    // this request, keep waiting. Resolve once nothing arrives for
+    // quietMs, since CS2 gives no explicit "end of response" marker.
+    if (pending.quietTimer) clearTimeout(pending.quietTimer)
+    pending.quietTimer = setTimeout(() => {
+      clearTimeout(pending.timeout)
+      this.pendingExecs.delete(id)
+      pending.resolve(pending.chunks.join(''))
+    }, this.quietMs)
   }
 
   async execute(command: string): Promise<string> {
@@ -138,18 +147,18 @@ export class RconManager {
     if (!socket) throw new Error('RCON socket not available')
 
     const requestId = this.nextId++
-    const mirrorId = this.nextId++
 
     return new Promise<string>((resolve, reject) => {
       const timeout = setTimeout(() => {
+        const pending = this.pendingExecs.get(requestId)
+        if (pending?.quietTimer) clearTimeout(pending.quietTimer)
         this.pendingExecs.delete(requestId)
         reject(new Error(`RCON command timed out: ${command}`))
       }, this.execTimeoutMs)
 
-      this.pendingExecs.set(requestId, { requestId, mirrorId, chunks: [], resolve, reject, timeout })
+      this.pendingExecs.set(requestId, { requestId, chunks: [], resolve, reject, timeout, quietTimer: null })
 
       socket.write(encodePacket(requestId, PACKET_TYPE_EXECCOMMAND, command))
-      socket.write(encodePacket(mirrorId, PACKET_TYPE_EXECCOMMAND, ''))
     })
   }
 
