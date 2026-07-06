@@ -19,7 +19,14 @@ import {
 import { RconManager } from './rcon.js'
 import { MatchPoller, type LiveMatch } from './match-poller.js'
 import { updateCs2Server } from './steamcmd.js'
-import { buildMatchJson, writeMatchFile, loadMatchWithRetry } from './matchzy.js'
+import {
+  buildMatchJson,
+  buildMatchJsonFromPreset,
+  parseCfgCvars,
+  writeMatchFile,
+  loadMatchWithRetry
+} from './matchzy.js'
+import type { PresetRow } from './db.js'
 
 /**
  * Emits 'servers-updated' with the full server list whenever state changes.
@@ -122,8 +129,9 @@ export async function launchServer(input: LaunchInput): Promise<LaunchResult> {
   }
 
   let configPath: string | undefined
+  let preset: PresetRow | undefined
   if (input.presetId) {
-    const preset = getPreset(input.presetId)
+    preset = getPreset(input.presetId)
     if (preset) {
       try {
         configPath = writeServerConfig(preset.configContent)
@@ -217,6 +225,9 @@ export async function launchServer(input: LaunchInput): Promise<LaunchResult> {
     if (input.matchConfigId) {
       loadMatchZyConfig(rconManager, input.matchConfigId, input.map)
       startMatchPoller(row.id, rconManager, input.matchConfigId, input.map)
+    } else if (input.presetId && preset) {
+      loadMatchZyPreset(rconManager, preset, input.map)
+      startMatchPollerFromPreset(row.id, rconManager, preset, input.map)
     }
   }
 
@@ -285,6 +296,47 @@ function startMatchPoller(
   poller.start()
   matchPollers.set(serverId, poller)
   console.log(`[manager] match poller started for server ${serverId}`)
+}
+
+/**
+ * Same idea as loadMatchZyConfig, but sourced from a preset's raw .cfg text
+ * instead of a match config's JSON convars. This is what lets a preset's
+ * rules (e.g. mp_maxrounds, mp_freezetime) survive MatchZy's warmup->live
+ * convar reset, without requiring a separate match-config entity.
+ */
+function loadMatchZyPreset(rconManager: RconManager, preset: PresetRow, launchMap: string): void {
+  let filename: string
+  try {
+    const json = buildMatchJsonFromPreset(preset, launchMap)
+    filename = writeMatchFile(preset.id, json)
+  } catch (err) {
+    console.error(`[manager] failed to write MatchZy match file from preset:`, (err as Error).message)
+    return
+  }
+
+  void loadMatchWithRetry(rconManager, filename).catch((err) => {
+    console.error(`[manager] MatchZy loadmatch (preset) failed:`, (err as Error).message)
+  })
+}
+
+function startMatchPollerFromPreset(
+  serverId: string,
+  rconManager: RconManager,
+  preset: PresetRow,
+  map: string
+): void {
+  const cvars = parseCfgCvars(preset.configContent)
+
+  let maxRounds = 24
+  if (cvars.mp_maxrounds) {
+    const parsed = parseInt(cvars.mp_maxrounds, 10)
+    if (!Number.isNaN(parsed)) maxRounds = parsed
+  }
+
+  const poller = new MatchPoller(rconManager, serverId, map, 'Team 1', 'Team 2', maxRounds, events)
+  poller.start()
+  matchPollers.set(serverId, poller)
+  console.log(`[manager] match poller started for server ${serverId} (from preset)`)
 }
 
 export function getLiveMatches(): LiveMatch[] {

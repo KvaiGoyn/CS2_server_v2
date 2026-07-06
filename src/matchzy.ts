@@ -2,7 +2,7 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { config } from './config.js'
 import type { RconManager } from './rcon.js'
-import type { MatchConfigRow } from './db.js'
+import type { MatchConfigRow, PresetRow } from './db.js'
 
 /**
  * MatchZy takes per-match convars only through a loaded match config — the
@@ -62,6 +62,54 @@ export function buildMatchJson(matchConfig: MatchConfigRow, launchMap: string): 
     team1: { name: matchConfig.team1_name, players: {} },
     team2: { name: matchConfig.team2_name, players: {} },
     cvars: parseCvars(matchConfig.convars)
+  }
+}
+
+/**
+ * Parse a preset's raw `.cfg` text into a flat string→string cvar map.
+ *
+ * Preset configs are hand-written server .cfg files: one `cvar value` pair
+ * per line, blank lines, and `//` comments (inline or full-line). This turns
+ * that into the same shape `buildMatchJsonFromPreset` hands to MatchZy, so
+ * the operator's rules survive the whole match instead of just warmup.
+ */
+export function parseCfgCvars(raw: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const rawLine of raw.split('\n')) {
+    // Strip comments first (// to end of line), then trim.
+    const line = rawLine.split('//')[0].trim()
+    if (!line) continue
+
+    const match = line.match(/^(\S+)\s+(.+)$/)
+    if (!match) continue
+
+    const [, key, rest] = match
+    // Values are often quoted ("15") or bare (15) — strip matching quotes.
+    const value = rest.trim().replace(/^"(.*)"$/, '$1')
+    out[key] = value
+  }
+  return out
+}
+
+/**
+ * Build a MatchZy match JSON from a preset, so a preset's rules go through
+ * `matchzy_loadmatch` instead of a one-shot `+exec` that MatchZy overwrites
+ * on the warmup→live transition.
+ *
+ * Team names are left generic: presets have no team-name fields, and MatchZy
+ * derives display names from connected players' own team assignment/nicknames
+ * when a match runs open (no player Steam64 roster), so nothing else is needed.
+ */
+export function buildMatchJsonFromPreset(preset: PresetRow, launchMap: string): MatchJson {
+  const map = preset.map || launchMap
+  return {
+    matchid: preset.id,
+    num_maps: 1,
+    maplist: [map],
+    players_per_team: 5,
+    team1: { name: 'Team 1', players: {} },
+    team2: { name: 'Team 2', players: {} },
+    cvars: parseCfgCvars(preset.configContent)
   }
 }
 
