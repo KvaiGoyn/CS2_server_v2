@@ -22,6 +22,9 @@ export interface MatchJson {
   team1: { name: string; players: Record<string, string> }
   team2: { name: string; players: Record<string, string> }
   cvars: Record<string, string>
+  remote_log_url: string
+  remote_log_header_key: string
+  remote_log_header_value: string
 }
 
 /**
@@ -47,17 +50,20 @@ function parseCvars(raw: string): Record<string, string> {
 /**
  * Point MatchZy's remote-log webhook at this backend for a given server.
  *
- * `matchzy_remote_log_url` makes MatchZy POST every match event (go-live,
- * round end, series result, etc.) to us as JSON, instead of the launcher
- * polling `status` and regex-parsing text the engine never guaranteed a
- * stable shape for. `matchzy_remote_log_header_key/value` lets the webhook
- * route verify the request actually came from this CS2 instance.
+ * `remote_log_url` is a top-level field of the match JSON (not a cvar) that
+ * makes MatchZy POST every match event (go-live, round end, series result,
+ * etc.) to us as JSON, instead of the launcher polling `status` and
+ * regex-parsing text the engine never guaranteed a stable shape for.
+ * `remote_log_header_key/value` let the webhook route verify the request
+ * actually came from this CS2 instance.
  */
-function webhookCvars(serverId: string): Record<string, string> {
+function webhookFields(
+  serverId: string
+): Pick<MatchJson, 'remote_log_url' | 'remote_log_header_key' | 'remote_log_header_value'> {
   return {
-    matchzy_remote_log_url: `http://127.0.0.1:${config.port}/webhooks/matchzy/${serverId}`,
-    matchzy_remote_log_header_key: 'x-matchzy-secret',
-    matchzy_remote_log_header_value: config.matchzyWebhookSecret
+    remote_log_url: `http://127.0.0.1:${config.port}/webhooks/matchzy/${serverId}`,
+    remote_log_header_key: 'x-matchzy-secret',
+    remote_log_header_value: config.matchzyWebhookSecret
   }
 }
 
@@ -86,7 +92,8 @@ export function buildMatchJson(
     players_per_team: 5,
     team1: { name: matchConfig.team1_name, players: {} },
     team2: { name: matchConfig.team2_name, players: {} },
-    cvars: { ...parseCvars(matchConfig.convars), ...webhookCvars(serverId) }
+    cvars: parseCvars(matchConfig.convars),
+    ...webhookFields(serverId)
   }
 }
 
@@ -138,7 +145,8 @@ export function buildMatchJsonFromPreset(
     players_per_team: 5,
     team1: { name: 'Team 1', players: {} },
     team2: { name: 'Team 2', players: {} },
-    cvars: { ...parseCfgCvars(preset.configContent), ...webhookCvars(serverId) }
+    cvars: parseCfgCvars(preset.configContent),
+    ...webhookFields(serverId)
   }
 }
 
