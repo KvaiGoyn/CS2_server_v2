@@ -44,6 +44,7 @@ export interface Config {
   basePort: number
   firewall: boolean
   gsltToken: string
+  rconPassword: string
   dbPath: string
   logDir: string
   csgoDir: string
@@ -93,6 +94,7 @@ export const config: Config = {
   basePort: int('BASE_PORT', 27015),
   firewall: bool('FIREWALL', false),
   gsltToken: str('GSLT_TOKEN', ''),
+  rconPassword: str('RCON_PASSWORD', ''),
   dbPath: resolve(str('DB_PATH', './data/launcher.db')),
   logDir: resolve(str('LOG_DIR', './data/logs')),
   csgoDir: resolveCsgoDir(),

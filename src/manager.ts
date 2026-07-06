@@ -183,7 +183,10 @@ export async function launchServer(input: LaunchInput): Promise<LaunchResult> {
   }
 
   const rconPort = port + 1
-  const rconPassword = extractRconPassword(config.csgoDir)
+  // Prefer the explicitly configured RCON password (passed to CS2 as
+  // +rcon_password at launch, so it's guaranteed to match). Fall back to
+  // scraping MatchZy_config.cfg for backward compatibility with older setups.
+  const rconPassword = config.rconPassword || extractRconPassword(config.csgoDir)
   const passwordHash = rconPassword ? hashPassword(rconPassword) : undefined
 
   const row: ServerRow = {

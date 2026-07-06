@@ -54,6 +54,14 @@ export function buildCs2Args(p: LaunchParams): string[] {
     p.map
   ]
 
+  // RCON password: set before +exec so the launcher can authenticate over
+  // RCON regardless of what a preset config does. Without this the engine
+  // runs with -usercon but no password, so no RCON client can connect and the
+  // whole match flow (score poller + matchzy_loadmatch) is silently skipped.
+  if (config.rconPassword) {
+    args.push('+rcon_password', config.rconPassword)
+  }
+
   // Preset config file execution (runs before extra args so they can override).
   if (p.configPath) {
     args.push('+exec', p.configPath)
