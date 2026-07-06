@@ -78,6 +78,13 @@ const METAMOD_SEARCH_PATH = 'Game\t\tcsgo/addons/metamod'
  * own installer adds. Re-insert it after every steamcmd run so CSSharp
  * plugins keep loading. Idempotent and best-effort: a missing/unwritable
  * gameinfo.gi must not block the server launch.
+ *
+ * Placement matters: per Metamod:Source's own Source 2 / CS2 install
+ * instructions, the Metamod search path MUST be the FIRST entry in
+ * SearchPaths, i.e. inserted BEFORE the "Game csgo" line, not after it.
+ * Inserting it after "Game csgo" (as an earlier version of this function
+ * did) can leave Metamod loading unreliably. See
+ * https://wiki.alliedmods.net/Installing_Metamod:Source
  */
 export function ensureMetamodHook(): void {
   if (!config.csgoDir) return
@@ -96,7 +103,7 @@ export function ensureMetamodHook(): void {
       return
     }
 
-    lines.splice(gameLineIndex + 1, 0, `\t\t\t${METAMOD_SEARCH_PATH.trim()}`)
+    lines.splice(gameLineIndex, 0, `\t\t\t${METAMOD_SEARCH_PATH.trim()}`)
     writeFileSync(gameinfoPath, lines.join('\n'), 'utf-8')
     console.log('[platform] re-inserted metamod search path into gameinfo.gi')
   } catch (err) {
