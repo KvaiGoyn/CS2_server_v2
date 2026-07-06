@@ -42,12 +42,12 @@ export class RconManager {
   private buffer = Buffer.alloc(0)
   private nextId = 1
   private pendingExecs = new Map<number, PendingExec>()
-  private readonly host = '127.0.0.1'
   private readonly execTimeoutMs = 8000
 
   constructor(
     private readonly port: number,
-    private readonly password: string
+    private readonly password: string,
+    private readonly host: string = '127.0.0.1'
   ) {}
 
   private ensureConnected(): Promise<void> {

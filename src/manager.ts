@@ -218,7 +218,7 @@ export async function launchServer(input: LaunchInput): Promise<LaunchResult> {
 
   // Initialize RCON manager for this server if password was found
   if (rconPassword) {
-    const rconManager = new RconManager(port, rconPassword)
+    const rconManager = new RconManager(port, rconPassword, config.rconHost)
     rconManagers.set(row.id, rconManager)
     console.log(`[manager] RCON initialized for server ${row.id} on port ${rconPort}`)
 
