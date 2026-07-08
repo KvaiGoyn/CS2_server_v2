@@ -24,6 +24,7 @@ import {
   buildMatchJsonFromPreset,
   parseCfgCvars,
   writeMatchFile,
+  writeLiveOverride,
   loadMatchWithRetry
 } from './matchzy.js'
 import type { PresetRow } from './db.js'
@@ -255,6 +256,7 @@ function loadMatchZyConfig(
   try {
     const json = buildMatchJson(matchConfig, launchMap, serverId)
     filename = writeMatchFile(serverId, json)
+    writeLiveOverride(json)
   } catch (err) {
     console.error(`[manager] failed to write MatchZy match file:`, (err as Error).message)
     return
@@ -315,6 +317,7 @@ function loadMatchZyPreset(
   try {
     const json = buildMatchJsonFromPreset(preset, launchMap, serverId)
     filename = writeMatchFile(serverId, json)
+    writeLiveOverride(json)
   } catch (err) {
     console.error(`[manager] failed to write MatchZy match file from preset:`, (err as Error).message)
     return
