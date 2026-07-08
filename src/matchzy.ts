@@ -31,20 +31,32 @@ export interface MatchJson {
 }
 
 /**
- * MatchZy configures remote event logging via CONVARS
- * (`matchzy_remote_log_url`, `matchzy_remote_log_header_key`,
- * `matchzy_remote_log_header_value`) — NOT via top-level fields of the match
- * JSON. An earlier version of this code put `remote_log_url` etc. as siblings
- * of `matchid` in the JSON; MatchZy's schema does not know those keys, and
- * unknown top-level fields can contribute to a parse failure. Fold them into
- * the `cvars` map so MatchZy applies them like any other convar on loadmatch.
+ * Cvars the launcher force-applies to every match, spread AFTER the operator's
+ * preset/config cvars so they win even if the preset sets a conflicting value.
  *
- * See MatchZy configuration docs (matchzy_remote_log_*).
+ * Two groups:
+ *
+ * 1. MatchZy remote event logging (`matchzy_remote_log_url`,
+ *    `matchzy_remote_log_header_key`, `matchzy_remote_log_header_value`) —
+ *    MatchZy takes these as CONVARS, NOT top-level fields of the match JSON.
+ *    An earlier version put `remote_log_url` etc. as siblings of `matchid`;
+ *    MatchZy's schema does not know those keys and unknown top-level fields
+ *    can contribute to a parse failure. Folding them into `cvars` makes
+ *    MatchZy apply them like any other convar on loadmatch.
+ *
+ * 2. `sv_lan 1` — this is a LAN club: every client is on the same local
+ *    network and the server runs WITHOUT a GSLT (anonymous Steam login). With
+ *    `sv_lan 0` such a server registers as an internet/secure server and
+ *    Steam player-auth fails, kicking everyone straight out of the loading
+ *    screen. Presets historically carried `sv_lan 0`, which only started
+ *    biting once match-JSON loading was fixed (before that the cvar never
+ *    applied). Forcing `sv_lan 1` here overrides any preset value.
  */
-function remoteLogCvars(
+function forcedCvars(
   serverId: string
 ): Record<string, string> {
   return {
+    sv_lan: '1',
     matchzy_remote_log_url: `http://127.0.0.1:${config.port}/webhooks/matchzy/${serverId}`,
     matchzy_remote_log_header_key: 'x-matchzy-secret',
     matchzy_remote_log_header_value: config.matchzyWebhookSecret
@@ -110,7 +122,7 @@ export function buildMatchJson(
     players_per_team: 5,
     team1: { name: matchConfig.team1_name, players: {} },
     team2: { name: matchConfig.team2_name, players: {} },
-    cvars: { ...parseCvars(matchConfig.convars), ...remoteLogCvars(serverId) }
+    cvars: { ...parseCvars(matchConfig.convars), ...forcedCvars(serverId) }
   }
 }
 
@@ -162,7 +174,7 @@ export function buildMatchJsonFromPreset(
     players_per_team: 5,
     team1: { name: 'Team 1', players: {} },
     team2: { name: 'Team 2', players: {} },
-    cvars: { ...parseCfgCvars(preset.configContent), ...remoteLogCvars(serverId) }
+    cvars: { ...parseCfgCvars(preset.configContent), ...forcedCvars(serverId) }
   }
 }
 
