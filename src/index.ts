@@ -342,7 +342,9 @@ app.post('/servers/:id/rcon', { preHandler: requireAuth }, async (req, reply) =>
 
   const result = await executeRconCommand(id, body.command)
   if (!result.success) {
-    return reply.code(500).send(result)
+    // Send { error } so the client's request() wrapper surfaces the real
+    // reason (e.g. "RCON not available for this server") in ApiError.message.
+    return reply.code(500).send({ error: result.message ?? 'RCON command failed' })
   }
   return result
 })
