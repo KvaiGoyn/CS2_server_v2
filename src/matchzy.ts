@@ -1,4 +1,5 @@
 import { writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { config } from './config.js'
 import type { RconManager } from './rcon.js'
@@ -15,16 +16,51 @@ import type { MatchConfigRow, PresetRow } from './db.js'
  */
 
 export interface MatchJson {
-  matchid: string
+  // MatchZy's schema requires `matchid` as a NUMBER (the canonical example
+  // uses `"matchid": 27`). A string here (a UUID, as an earlier version of
+  // this code used) fails JSON deserialization inside MatchZy and the plugin
+  // echoes "Match load failed! Resetting current match" — the preset cvars
+  // never apply. Derive a stable unsigned 32-bit int from the server id.
+  matchid: number
   num_maps: number
   maplist: string[]
   players_per_team: number
   team1: { name: string; players: Record<string, string> }
   team2: { name: string; players: Record<string, string> }
   cvars: Record<string, string>
-  remote_log_url: string
-  remote_log_header_key: string
-  remote_log_header_value: string
+}
+
+/**
+ * MatchZy configures remote event logging via CONVARS
+ * (`matchzy_remote_log_url`, `matchzy_remote_log_header_key`,
+ * `matchzy_remote_log_header_value`) — NOT via top-level fields of the match
+ * JSON. An earlier version of this code put `remote_log_url` etc. as siblings
+ * of `matchid` in the JSON; MatchZy's schema does not know those keys, and
+ * unknown top-level fields can contribute to a parse failure. Fold them into
+ * the `cvars` map so MatchZy applies them like any other convar on loadmatch.
+ *
+ * See MatchZy configuration docs (matchzy_remote_log_*).
+ */
+function remoteLogCvars(
+  serverId: string
+): Record<string, string> {
+  return {
+    matchzy_remote_log_url: `http://127.0.0.1:${config.port}/webhooks/matchzy/${serverId}`,
+    matchzy_remote_log_header_key: 'x-matchzy-secret',
+    matchzy_remote_log_header_value: config.matchzyWebhookSecret
+  }
+}
+
+/**
+ * Derive a stable unsigned 32-bit match id from the server's UUID. MatchZy
+ * wants a numeric matchid (its example uses an integer), but the launcher
+ * keys everything off the server's UUID. Hashing the UUID gives a stable
+ * number in MatchZy's range; the webhook route still uses the real serverId
+ * from the URL path, so routing does not depend on this number.
+ */
+function numericMatchId(serverId: string): number {
+  const digest = createHash('sha256').update(serverId).digest()
+  return digest.readUInt32BE(0)
 }
 
 /**
@@ -48,26 +84,6 @@ function parseCvars(raw: string): Record<string, string> {
 }
 
 /**
- * Point MatchZy's remote-log webhook at this backend for a given server.
- *
- * `remote_log_url` is a top-level field of the match JSON (not a cvar) that
- * makes MatchZy POST every match event (go-live, round end, series result,
- * etc.) to us as JSON, instead of the launcher polling `status` and
- * regex-parsing text the engine never guaranteed a stable shape for.
- * `remote_log_header_key/value` let the webhook route verify the request
- * actually came from this CS2 instance.
- */
-function webhookFields(
-  serverId: string
-): Pick<MatchJson, 'remote_log_url' | 'remote_log_header_key' | 'remote_log_header_value'> {
-  return {
-    remote_log_url: `http://127.0.0.1:${config.port}/webhooks/matchzy/${serverId}`,
-    remote_log_header_key: 'x-matchzy-secret',
-    remote_log_header_value: config.matchzyWebhookSecret
-  }
-}
-
-/**
  * Build a MatchZy match JSON from a stored match config.
  *
  * Player rosters are left empty: the current match config schema stores only
@@ -75,9 +91,11 @@ function webhookFields(
  * players as they connect. The `cvars` object carries the operator-defined
  * convars, which is the whole point — MatchZy re-applies them on go-live.
  *
- * `matchid` is the server's own id, not the match config's — a match config
- * can be reused across multiple simultaneously-running servers, and the
- * webhook route needs a matchid that uniquely identifies one running server.
+ * `matchid` is a number derived from the server's id (see numericMatchId):
+ * MatchZy's schema requires a numeric matchid; a UUID string here makes
+ * MatchZy reject the whole file ("Match load failed! Resetting current
+ * match"). The webhook route identifies the server via the URL path, not via
+ * this matchid, so a hashed number is fine.
  */
 export function buildMatchJson(
   matchConfig: MatchConfigRow,
@@ -86,14 +104,13 @@ export function buildMatchJson(
 ): MatchJson {
   const map = matchConfig.map || launchMap
   return {
-    matchid: serverId,
+    matchid: numericMatchId(serverId),
     num_maps: 1,
     maplist: [map],
     players_per_team: 5,
     team1: { name: matchConfig.team1_name, players: {} },
     team2: { name: matchConfig.team2_name, players: {} },
-    cvars: parseCvars(matchConfig.convars),
-    ...webhookFields(serverId)
+    cvars: { ...parseCvars(matchConfig.convars), ...remoteLogCvars(serverId) }
   }
 }
 
@@ -139,14 +156,13 @@ export function buildMatchJsonFromPreset(
 ): MatchJson {
   const map = preset.map || launchMap
   return {
-    matchid: serverId,
+    matchid: numericMatchId(serverId),
     num_maps: 1,
     maplist: [map],
     players_per_team: 5,
     team1: { name: 'Team 1', players: {} },
     team2: { name: 'Team 2', players: {} },
-    cvars: parseCfgCvars(preset.configContent),
-    ...webhookFields(serverId)
+    cvars: { ...parseCfgCvars(preset.configContent), ...remoteLogCvars(serverId) }
   }
 }
 
@@ -181,13 +197,31 @@ export async function loadMatchWithRetry(
 ): Promise<boolean> {
   const command = `matchzy_loadmatch ${filename}`
 
+  // MatchZy's reply vocabulary:
+  //   - "Unknown command ..."      → plugin not registered yet (keep retrying)
+  //   - "Match load failed! Resetting current match" → plugin IS up but the
+  //     JSON was rejected (bad schema — e.g. a non-numeric matchid). Retrying
+  //     with the same file won't help, but a flaky transient load can, so we
+  //     still retry a couple of times before giving up loudly.
+  //   - anything else             → accepted.
+  const isNotReady = (r: string): boolean => /unknown command/i.test(r)
+  const isLoadFailed = (r: string): boolean =>
+    /match load failed|resetting current match/i.test(r)
+
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
       const response = await rconManager.execute(command)
-      // MatchZy echoes "Unknown command" (with the CS2 console prefix) while
-      // the plugin hasn't registered its commands yet. Anything else means
-      // the command reached the plugin.
-      if (!/unknown command/i.test(response)) {
+      if (isLoadFailed(response)) {
+        // The plugin received the command but rejected the match JSON.
+        // Surface the exact echo so the operator can see WHY (schema bug,
+        // bad cvar, etc.) instead of it masquerading as "accepted".
+        console.error(
+          `[matchzy] loadmatch REJECTED on attempt ${attempt}: ${response.trim()}`
+        )
+        // Don't immediately bail — the first response sometimes races with
+        // plugin init. Keep retrying; if it keeps failing, the loop's end
+        // logs the definitive "never accepted".
+      } else if (!isNotReady(response)) {
         console.log(
           `[matchzy] loadmatch accepted on attempt ${attempt}${response ? `: ${response.trim()}` : ''}`
         )
