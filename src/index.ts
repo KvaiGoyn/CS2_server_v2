@@ -203,6 +203,7 @@ app.post('/presets', { preHandler: requireAuth }, async (req, reply) => {
       gameMode: body.gameMode as string,
       map: body.map as string,
       configContent: body.configContent as string,
+      settings: typeof body.settings === 'string' ? body.settings : null,
       createdAt: Date.now()
     })
     return { success: true, id }
@@ -235,7 +236,8 @@ app.put('/presets/:id', { preHandler: requireAuth }, async (req, reply) => {
       gameType: body.gameType ?? preset.gameType,
       gameMode: body.gameMode ?? preset.gameMode,
       map: body.map ?? preset.map,
-      configContent: body.configContent ?? preset.configContent
+      configContent: body.configContent ?? preset.configContent,
+      settings: typeof body.settings === 'string' ? body.settings : preset.settings
     })
     return { success: true }
   } catch (err) {

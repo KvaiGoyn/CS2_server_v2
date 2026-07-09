@@ -284,6 +284,44 @@ async function main() {
     list = await r.json()
     ok(list.length === 0, 'server list empty after clear')
 
+    // 14. preset with structured settings round-trips through the API
+    const settingsJson = JSON.stringify({ cvars: { mp_maxrounds: '24', sv_lan: '1' }, advanced: 'mp_custom 1' })
+    r = await fetch(`${base}/presets`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...auth },
+      body: JSON.stringify({
+        name: 'Smoke Preset',
+        gameType: '0',
+        gameMode: '1',
+        map: 'de_dust2',
+        configContent: 'mp_maxrounds 24',
+        settings: settingsJson
+      })
+    })
+    ok(r.status === 200, 'create preset with settings -> 200')
+    const { id: presetId } = await r.json()
+    ok(typeof presetId === 'string', 'create preset returns an id')
+
+    r = await fetch(`${base}/presets`, { headers: auth })
+    const presets = await r.json()
+    ok(Array.isArray(presets) && presets.length >= 1, 'preset list has entries')
+    const smokePreset = presets.find((p) => p.id === presetId)
+    ok(smokePreset !== undefined, 'created preset is in the list')
+    ok(smokePreset.settings === settingsJson, 'preset settings round-trip preserved')
+    ok(smokePreset.configContent === 'mp_maxrounds 24', 'preset configContent stored as sent')
+
+    // 15. updating settings persists the new value
+    const updatedSettings = JSON.stringify({ cvars: { mp_maxrounds: '30' }, advanced: '' })
+    r = await fetch(`${base}/presets/${presetId}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', ...auth },
+      body: JSON.stringify({ settings: updatedSettings, configContent: 'mp_maxrounds 30' })
+    })
+    ok(r.status === 200, 'update preset settings -> 200')
+    r = await fetch(`${base}/presets/${presetId}`, { headers: auth })
+    const refetched = await r.json()
+    ok(refetched.settings === updatedSettings, 'preset settings updated')
+
     console.log(`\nSMOKE PASSED (${passed} checks)`)
   } finally {
     cleanup()

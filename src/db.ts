@@ -39,6 +39,11 @@ export interface PresetRow {
   gameMode: string
   map: string
   configContent: string
+  // Structured per-convar settings (JSON string the client owns/serializes).
+  // NULL on presets created before this column existed; the client migrates
+  // lazily by parsing configContent back into settings on first edit. The
+  // launch path still reads configContent, so a NULL settings never blocks it.
+  settings: string | null
   createdAt: number
 }
 
@@ -105,6 +110,7 @@ db.exec(`
     gameMode      TEXT NOT NULL,
     map           TEXT NOT NULL,
     configContent TEXT NOT NULL,
+    settings      TEXT,
     createdAt     INTEGER NOT NULL
   );
 
@@ -150,6 +156,7 @@ function addColumnIfMissing(table: string, column: string, definition: string): 
 
 addColumnIfMissing('servers', 'rcon_port', 'INTEGER')
 addColumnIfMissing('servers', 'rcon_password_hash', 'TEXT')
+addColumnIfMissing('presets', 'settings', 'TEXT')
 
 // --- User statements ---
 const insertUserStmt = db.prepare(
@@ -218,9 +225,9 @@ export function deleteStoppedServers(): void {
 // --- Preset statements ---
 const insertPresetStmt = db.prepare(`
   INSERT INTO presets
-    (id, name, description, gameType, gameMode, map, configContent, createdAt)
+    (id, name, description, gameType, gameMode, map, configContent, settings, createdAt)
   VALUES
-    (@id, @name, @description, @gameType, @gameMode, @map, @configContent, @createdAt)
+    (@id, @name, @description, @gameType, @gameMode, @map, @configContent, @settings, @createdAt)
 `)
 const listPresetsStmt = db.prepare(`SELECT * FROM presets ORDER BY createdAt DESC`)
 const getPresetStmt = db.prepare(`SELECT * FROM presets WHERE id = ?`)
@@ -231,13 +238,14 @@ const updatePresetStmt = db.prepare(`
       gameType = COALESCE(?, gameType),
       gameMode = COALESCE(?, gameMode),
       map = COALESCE(?, map),
-      configContent = COALESCE(?, configContent)
+      configContent = COALESCE(?, configContent),
+      settings = COALESCE(?, settings)
   WHERE id = ?
 `)
 const deletePresetStmt = db.prepare(`DELETE FROM presets WHERE id = ?`)
 
 export function insertPreset(row: PresetRow): void {
-  insertPresetStmt.run(row as unknown as Record<string, SQLInputValue>)
+  insertPresetStmt.run({ ...row, settings: row.settings ?? null } as unknown as Record<string, SQLInputValue>)
 }
 
 export function listPresets(): PresetRow[] {
@@ -259,6 +267,7 @@ export function updatePreset(
     updates.gameMode ?? null,
     updates.map ?? null,
     updates.configContent ?? null,
+    updates.settings ?? null,
     id
   )
 }
@@ -384,7 +393,7 @@ export async function seedDefaultPresets(): Promise<boolean> {
   const { randomUUID } = await import('node:crypto')
   const configContent = `// --- Базовые параметры
 sv_cheats 0
-sv_lan 0
+sv_lan 1
 log on
 
 // --- Командные и дружеский огонь
@@ -453,6 +462,7 @@ tv_relayvoice 0`
     gameMode: '1',
     map: 'de_dust2',
     configContent,
+    settings: null,
     createdAt: Date.now()
   })
 
