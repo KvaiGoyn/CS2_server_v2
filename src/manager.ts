@@ -3,6 +3,7 @@ import { randomUUID, createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { mkdirSync, openSync, writeFileSync, chmodSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { createSocket, type Socket } from 'node:dgram'
 import { config } from './config.js'
 import { buildCs2Args, openFirewallPort, ensureMetamodHook } from './platform.js'
 import {
@@ -60,13 +61,49 @@ function extractRconPassword(csgoDir: string): string | null {
 }
 
 /**
- * Pick the lowest free UDP port at/above BASE_PORT among running servers.
- * Mirrors the original launcher's allocation.
+ * Probe whether a UDP port is actually free on the host by trying to bind it.
+ *
+ * The backend's own server list (listRunningServers) only knows about servers
+ * IT launched — a hand-started or zombie CS2 sitting on a port (no DB row) is
+ * invisible to it, so getNextAvailablePort would hand out an occupied port and
+ * the new CS2 fails with EADDRINUSE. Binding a throwaway UDP socket on the
+ * port catches that: if anything is already bound there (on any interface),
+ * bind fails with EADDRINUSE and we skip the port.
+ *
+ * UDP because CS2's game socket is UDP (-port); reuseAddr:false makes the probe
+ * strict (a CS2 bound with SO_REUSEADDR would otherwise let our probe bind too
+ * and mask the conflict). Bound on 0.0.0.0 so a process on any interface is
+ * detected.
  */
-function getNextAvailablePort(): number {
+async function isPortFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const sock: Socket = createSocket({ type: 'udp4', reuseAddr: false })
+    let done = false
+    const finish = (free: boolean): void => {
+      if (done) return
+      done = true
+      try { sock.close() } catch { /* already closed */ }
+      resolve(free)
+    }
+    sock.once('error', () => finish(false))
+    sock.once('listening', () => finish(true))
+    sock.bind(port, '0.0.0.0')
+  })
+}
+
+/**
+ * Pick the lowest free UDP port at/above BASE_PORT.
+ *
+ * Checks BOTH the backend's running-server list (fast path) AND the actual
+ * host bind state (isPortFree). The latter catches hand-started or zombie CS2
+ * processes that occupy a port without a DB row — without it, the launched
+ * server fails with EADDRINUSE and RconManager ends up pointing at the wrong
+ * (stale) process, producing "RCON authentication failed (wrong password)".
+ */
+async function getNextAvailablePort(): Promise<number> {
   const used = new Set(listRunningServers().map((s) => s.port))
   let port = config.basePort
-  while (used.has(port)) port++
+  while (used.has(port) || !(await isPortFree(port))) port++
   return port
 }
 
@@ -114,7 +151,7 @@ export interface LaunchResult {
 }
 
 export async function launchServer(input: LaunchInput): Promise<LaunchResult> {
-  const port = getNextAvailablePort()
+  const port = await getNextAvailablePort()
 
   openFirewallPort(port)
 
