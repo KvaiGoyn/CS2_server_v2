@@ -55,23 +55,28 @@ export interface MatchJson {
  *    can contribute to a parse failure. Folding them into `cvars` makes
  *    MatchZy apply them like any other convar on loadmatch.
  *
- * 2. `sv_lan 1` — this is a LAN club: every client is on the same local
- *    network and the server runs WITHOUT a GSLT (anonymous Steam login). With
- *    `sv_lan 0` such a server registers as an internet/secure server and
- *    Steam player-auth fails, kicking everyone straight out of the loading
- *    screen. Presets historically carried `sv_lan 0`, which only started
- *    biting once match-JSON loading was fixed (before that the cvar never
- *    applied). Forcing `sv_lan 1` here overrides any preset value.
+ * 2. `sv_lan` — picked by GSLT presence. This is a LAN club: every client is
+ *    on the same local network. WITHOUT a GSLT the server runs with anonymous
+ *    Steam login, and `sv_lan 0` would register an internet/secure server whose
+ *    Steam player-auth fails — kicking everyone straight out of the loading
+ *    screen (presets historically carried `sv_lan 0`, which only started biting
+ *    once match-JSON loading was fixed). So we force `sv_lan 1` then. WITH a
+ *    GSLT configured (env `GSLT_TOKEN`), the server runs as a proper
+ *    authenticated server (`sv_lan 0` + `sv_setsteamaccount` from buildCs2Args)
+ *    and we force `sv_lan 0` instead — the LAN workaround is no longer needed.
+ *    Either way this overrides the preset value (forcedCvars spreads last).
  */
 function forcedCvars(
   serverId: string
 ): Record<string, string> {
-  return {
-    sv_lan: '1',
+  const cvars: Record<string, string> = {
     matchzy_remote_log_url: `http://127.0.0.1:${config.port}/webhooks/matchzy/${serverId}`,
     matchzy_remote_log_header_key: 'x-matchzy-secret',
     matchzy_remote_log_header_value: config.matchzyWebhookSecret
   }
+  // sv_lan by GSLT: see the rationale above.
+  cvars.sv_lan = config.gsltToken ? '0' : '1'
+  return cvars
 }
 
 /**
