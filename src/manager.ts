@@ -168,6 +168,7 @@ export async function launchServer(input: LaunchInput): Promise<LaunchResult> {
 
   let configPath: string | undefined
   let preset: PresetRow | undefined
+  let svLan: string | undefined
   if (input.presetId) {
     preset = getPreset(input.presetId)
     if (preset) {
@@ -176,6 +177,9 @@ export async function launchServer(input: LaunchInput): Promise<LaunchResult> {
       } catch (err) {
         return { success: false, error: `Failed to write preset config: ${(err as Error).message}` }
       }
+      // Read sv_lan from the preset so buildCs2Args can gate the GSLT token on
+      // it (public = sv_lan 0 passes the token; LAN = sv_lan 1 omits it).
+      svLan = parseCfgCvars(preset.configContent).sv_lan
     }
   }
 
@@ -184,7 +188,8 @@ export async function launchServer(input: LaunchInput): Promise<LaunchResult> {
     gameMode: input.gameMode,
     map: input.map,
     port,
-    configPath
+    configPath,
+    svLan
   })
 
   // Redirect the server's stdout/stderr to a per-launch log file so we can

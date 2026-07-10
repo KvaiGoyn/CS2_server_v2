@@ -24,6 +24,14 @@ export interface LaunchParams {
   map: string
   port: number
   configPath?: string
+  /**
+   * sv_lan from the preset ('1' = LAN, '0' = public). Decides whether the
+   * GSLT (+sv_setsteamaccount) is passed to CS2: only public servers need it.
+   * Passing a token on a LAN server makes CS2 attempt a Steam3 login it can't
+   * complete (anonymous LAN clients don't present Steam tickets), surfacing as
+   * "disconnected from Steam3" + "insecure" in `status`. Defaults to LAN.
+   */
+  svLan?: string
 }
 
 /**
@@ -67,8 +75,13 @@ export function buildCs2Args(p: LaunchParams): string[] {
     args.push('+exec', p.configPath)
   }
 
-  // GSLT is only needed for public/internet servers (Linux prod). Optional.
-  if (config.gsltToken) {
+  // GSLT (+sv_setsteamaccount) only for public/internet servers (sv_lan 0).
+  // On LAN (sv_lan 1) Steam tickets aren't exchanged, so a Steam3 login attempt
+  // just produces "disconnected from Steam3" / "insecure" in `status` and can
+  // block clients. sv_lan itself comes from the preset via the match JSON; we
+  // only gate the token here, we don't pass +sv_lan (it'd race the match JSON).
+  const isPublic = p.svLan === '0'
+  if (isPublic && config.gsltToken) {
     args.push('+sv_setsteamaccount', config.gsltToken)
   }
 
