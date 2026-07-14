@@ -1,0 +1,16 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - agent/ci-sentinel-smoke
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests (intentional failure for CI Sentinel smoke test)
+        run: |
+          echo "Simulating a failing test for NEXUS CI Sentinel smoke test"
+          exit 1
